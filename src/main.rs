@@ -1,4 +1,3 @@
-// use redis::Commands;
 use redis::{AsyncCommands, RedisResult};
 use serde::{Deserialize, Serialize};
 use actix_web::{web, App, HttpResponse, Responder, HttpServer};
@@ -13,7 +12,6 @@ struct AppState {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let cli = RedisClient::new("redis://127.0.0.1:6379");
-
 
     let shared_data = web::Data::new(AppState {
         client: Mutex::new(Box::new(cli)),
@@ -78,13 +76,13 @@ impl RedisClient {
 #[async_trait]
 impl RedisAPI for RedisClient {
     async fn get(&self, key: &str) -> RedisResult<String> {
-        let mut conn = self.client.get_async_connection().await?;
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
         let value: String = conn.get(key).await?;
         RedisResult::Ok(value)
     }
 
     async fn set(&self, key: &str, value: &str) -> RedisResult<()> {
-        let mut conn = self.client.get_async_connection().await?;
+        let mut conn = self.client.get_multiplexed_async_connection().await?;
         conn.set(key, value).await?;
         RedisResult::Ok(())
     }
