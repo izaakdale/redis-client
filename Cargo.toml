@@ -1,0 +1,11 @@
+[package]
+name = "redis-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1", features = ["derive"] }
+async-trait = "0.1"
+redis = { version = "0.25", features = ["aio", "tokio-comp"] }
+tokio = { version = "1", features = ["full"] }
