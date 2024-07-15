@@ -1,12 +1,14 @@
+use actix_web::{
+    dev::Service as _, web, App, Error, HttpResponse, HttpServer, Responder, ResponseError,
+};
+use async_trait::async_trait;
 use redis::{AsyncCommands, RedisResult};
 use serde::{Deserialize, Serialize};
-use actix_web::{web, App, HttpResponse, Responder, HttpServer};
 use std::sync::Mutex;
-use async_trait::async_trait;
-
+use thiserror::Error;
 
 struct AppState {
-    client: Mutex<Box<dyn RedisAPI>>
+    client: Mutex<Box<dyn RedisAPI>>,
 }
 
 #[actix_web::main]
@@ -16,17 +18,17 @@ async fn main() -> std::io::Result<()> {
     let shared_data = web::Data::new(AppState {
         client: Mutex::new(Box::new(cli)),
     });
-    
+
     HttpServer::new(move || {
         App::new()
-        .app_data(shared_data.clone())
-        .route("/", web::get().to(get_value))
-        .route("/", web::post().to(set_value))
-    }).bind("127.0.0.1:8080")?
+            .app_data(shared_data.clone())
+            .route("/", web::get().to(get_value))
+            .route("/", web::post().to(set_value))
+    })
+    .bind("127.0.0.1:8080")?
     .run()
     .await
 }
-
 
 #[derive(Serialize, Deserialize)]
 struct GetValueReq {
@@ -38,14 +40,42 @@ struct GetValueResp {
     value: String,
 }
 
-async fn get_value(req: web::Json<GetValueReq>, data: web::Data<AppState>) -> impl Responder {
-    let client = data.client.lock().unwrap();
-    let val = client.get(&req.key).await.unwrap();
+#[derive(Error, Debug)]
+enum MyError {
+    #[error("Failed to acquire lock")]
+    LockError,
+    #[error("Failed to retrieve value")]
+    ClientError(#[from] Box<dyn std::error::Error>), // Example of wrapping an error
+}
 
-    HttpResponse::Ok().json(GetValueResp{
+impl ResponseError for MyError {
+    fn error_response(&self) -> HttpResponse {
+        match *self {
+            MyError::LockError => HttpResponse::InternalServerError().json("Internal server error"),
+            MyError::ClientError(ref e) => HttpResponse::InternalServerError()
+                .json(format!("Failed to retrieve value: {:?}", e)),
+        }
+    }
+}
+
+async fn get_value(
+    req: web::Json<GetValueReq>,
+    data: web::Data<AppState>,
+) -> Result<impl Responder, Error> {
+    let client = data.client.lock().map_err(|e| {
+        eprintln!("Failed to acquire lock: {:?}", e);
+        MyError::LockError
+    })?;
+
+    let val = client.get(&req.key).await.map_err(|e| {
+        eprintln!("Failed to retrieve value: {:?}", e);
+        MyError::ClientError(Box::new(e))
+    })?;
+
+    Ok(HttpResponse::Ok().json(GetValueResp {
         key: req.key.clone(),
-        value: val
-    })
+        value: val,
+    }))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -54,10 +84,21 @@ struct SetValueReq {
     value: String,
 }
 
-async fn set_value(req: web::Json<SetValueReq>, data: web::Data<AppState>) -> impl Responder {
-    let client = data.client.lock().unwrap();
-    client.set(&req.key, &req.value).await.unwrap();
-    HttpResponse::Accepted()
+async fn set_value(
+    req: web::Json<SetValueReq>,
+    data: web::Data<AppState>,
+) -> Result<impl Responder, Error> {
+    let client = data.client.lock().map_err(|e| {
+        eprintln!("Failed to acquire lock: {:?}", e);
+        MyError::LockError
+    })?;
+
+    let res = client.set(&req.key, &req.value).await.map_err(|e| {
+        eprintln!("Failed to set value: {:?}", e);
+        MyError::ClientError(Box::new(e))
+    })?;
+
+    Ok(HttpResponse::Ok().json(res))
 }
 
 pub struct RedisClient {
@@ -71,7 +112,6 @@ impl RedisClient {
         }
     }
 }
-
 
 #[async_trait]
 impl RedisAPI for RedisClient {
@@ -90,7 +130,6 @@ impl RedisAPI for RedisClient {
 
 #[async_trait]
 pub trait RedisAPI: Send + Sync {
-  async fn get(&self, key: &str) -> RedisResult<String>;
-  async fn set(&self, key: &str, value: &str) -> RedisResult<()>;
+    async fn get(&self, key: &str) -> RedisResult<String>;
+    async fn set(&self, key: &str, value: &str) -> RedisResult<()>;
 }
-

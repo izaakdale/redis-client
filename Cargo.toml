@@ -9,3 +9,4 @@ serde = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 redis = { version = "0.25", features = ["aio", "tokio-comp"] }
 tokio = { version = "1", features = ["full"] }
+thiserror = "1"
